@@ -21,20 +21,16 @@ export class VideoService {
   private valider(
     user: AuthUser,
     dto: {
-      youtubeId?: string;
-      sourceObjectKey?: string;
+      sourceObjectKey: string;
       niveauCibleId?: string;
       matiereCibleeId?: string;
     },
-  ): string | undefined {
-    if (!dto.youtubeId && !dto.sourceObjectKey) {
-      throw new BadRequestException('Fournir soit youtubeId, soit sourceObjectKey');
+  ): string {
+    if (!dto.sourceObjectKey) {
+      throw new BadRequestException('sourceObjectKey requis (upload YouTube serveur uniquement)');
     }
     if (dto.niveauCibleId && dto.matiereCibleeId) {
       throw new BadRequestException('Ciblage niveau et matiere mutuellement exclusifs (cf. 4.4)');
-    }
-    if (!dto.sourceObjectKey) {
-      return undefined;
     }
     // La cle source doit appartenir a l'uploader (evite exfiltration / suppression).
     return assertCleAppartientA(dto.sourceObjectKey, user.id);
@@ -43,66 +39,60 @@ export class VideoService {
   /** Publication par un Compte_Createur (FO-1 / EN-1, rang >= formateur). */
   async publierCreateur(user: AuthUser, dto: CreateVideoCreateurDto) {
     const sourceObjectKey = this.valider(user, dto);
-    const { video, uploadNecessaire } = await this.prisma.withRlsContext(this.ctx(user), async (tx) => {
+    const video = await this.prisma.withRlsContext(this.ctx(user), async (tx) => {
       const compte = await tx.compteCreateur.findUnique({ where: { utilisateurId: user.id } });
       if (!compte) {
         throw new ForbiddenException('Aucun Compte_Createur (demande de statut requise, cf. SA-3/SA-4)');
       }
-      const creee = await tx.video.create({
+      return tx.video.create({
         data: {
           titre: dto.titre,
           description: dto.description,
-          youtubeId: dto.youtubeId ?? YOUTUBE_ID_EN_ATTENTE,
+          youtubeId: YOUTUBE_ID_EN_ATTENTE,
           compteCreateurId: compte.id,
           niveauCibleId: dto.niveauCibleId,
           matiereCibleeId: dto.matiereCibleeId,
         },
       });
-      return { video: creee, uploadNecessaire: !dto.youtubeId && Boolean(sourceObjectKey) };
     });
 
-    if (uploadNecessaire && sourceObjectKey) {
-      await this.jobs.enfilerUploadYoutube({
-        videoId: video.id,
-        sourceObjectKey,
-        ownerUserId: user.id,
-        titre: dto.titre,
-        description: dto.description,
-      });
-    }
+    await this.jobs.enfilerUploadYoutube({
+      videoId: video.id,
+      sourceObjectKey,
+      ownerUserId: user.id,
+      titre: dto.titre,
+      description: dto.description,
+    });
     return video;
   }
 
   /** Publication dans un Groupe TDS (TDS-2). */
   async publierTds(user: AuthUser, dto: CreateVideoTdsDto) {
     const sourceObjectKey = this.valider(user, dto);
-    const { video, uploadNecessaire } = await this.prisma.withRlsContext(this.ctx(user), async (tx) => {
+    const video = await this.prisma.withRlsContext(this.ctx(user), async (tx) => {
       const groupe = await tx.groupeTds.findUnique({ where: { id: dto.groupeTdsId } });
       if (!groupe || groupe.tuteurId !== user.id) {
         throw new ForbiddenException('Seul le tuteur du Groupe TDS peut y publier');
       }
-      const creee = await tx.video.create({
+      return tx.video.create({
         data: {
           titre: dto.titre,
           description: dto.description,
-          youtubeId: dto.youtubeId ?? YOUTUBE_ID_EN_ATTENTE,
+          youtubeId: YOUTUBE_ID_EN_ATTENTE,
           groupeTdsId: dto.groupeTdsId,
           niveauCibleId: dto.niveauCibleId,
           matiereCibleeId: dto.matiereCibleeId,
         },
       });
-      return { video: creee, uploadNecessaire: !dto.youtubeId && Boolean(sourceObjectKey) };
     });
 
-    if (uploadNecessaire && sourceObjectKey) {
-      await this.jobs.enfilerUploadYoutube({
-        videoId: video.id,
-        sourceObjectKey,
-        ownerUserId: user.id,
-        titre: dto.titre,
-        description: dto.description,
-      });
-    }
+    await this.jobs.enfilerUploadYoutube({
+      videoId: video.id,
+      sourceObjectKey,
+      ownerUserId: user.id,
+      titre: dto.titre,
+      description: dto.description,
+    });
     return video;
   }
 

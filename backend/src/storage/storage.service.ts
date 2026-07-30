@@ -5,6 +5,13 @@ import { Readable } from 'stream';
 
 export type BucketLogique = 'resources' | 'library';
 
+export interface PresignUploadPolicy {
+  url: string;
+  fields: Record<string, string>;
+  maxBytes: number;
+  contentType?: string;
+}
+
 /**
  * Stockage de fichiers via MinIO (S3-compatible), remplacant Supabase Storage.
  * Le client uploade/telecharge directement via des URLs pre-signees ; l'API ne
@@ -17,6 +24,8 @@ export class StorageService implements OnModuleInit {
   private readonly bucketResources: string;
   private readonly bucketLibrary: string;
   private readonly presignTtl: number;
+  private readonly maxBytesResources: number;
+  private readonly maxBytesLibrary: number;
 
   constructor(private readonly config: ConfigService) {
     this.client = new MinioClient({
@@ -29,6 +38,8 @@ export class StorageService implements OnModuleInit {
     this.bucketResources = config.get<string>('MINIO_BUCKET_RESOURCES') ?? 'resources';
     this.bucketLibrary = config.get<string>('MINIO_BUCKET_LIBRARY') ?? 'library';
     this.presignTtl = Number(config.get('MINIO_PRESIGN_TTL') ?? 900);
+    this.maxBytesResources = Number(config.get('MINIO_MAX_UPLOAD_RESOURCES') ?? 104_857_600); // 100 Mo
+    this.maxBytesLibrary = Number(config.get('MINIO_MAX_UPLOAD_LIBRARY') ?? 524_288_000); // 500 Mo
   }
 
   async onModuleInit(): Promise<void> {
@@ -45,9 +56,42 @@ export class StorageService implements OnModuleInit {
     return logique === 'library' ? this.bucketLibrary : this.bucketResources;
   }
 
-  /** URL pre-signee pour televerser un objet (PUT). */
-  async urlUpload(logique: BucketLogique, cle: string): Promise<string> {
-    return this.client.presignedPutObject(this.bucket(logique), cle, this.presignTtl);
+  plafondUpload(logique: BucketLogique): number {
+    return logique === 'library' ? this.maxBytesLibrary : this.maxBytesResources;
+  }
+
+  /**
+   * Policy POST pre-signee avec content-length-range (+ Content-Type optionnel).
+   * Le client doit poster multipart/form-data avec les champs retournes.
+   */
+  async policyUpload(
+    logique: BucketLogique,
+    cle: string,
+    tailleOctets: number,
+    contentType?: string,
+  ): Promise<PresignUploadPolicy> {
+    const maxBytes = this.plafondUpload(logique);
+    if (tailleOctets > maxBytes) {
+      throw new Error(`Fichier trop volumineux (max ${maxBytes} octets pour ${logique})`);
+    }
+
+    const policy = this.client.newPostPolicy();
+    policy.setBucket(this.bucket(logique));
+    policy.setKey(cle);
+    policy.setExpires(new Date(Date.now() + this.presignTtl * 1000));
+    // Fenetre etroite autour de la taille declaree (+/- 0) : exact.
+    policy.setContentLengthRange(tailleOctets, tailleOctets);
+    if (contentType) {
+      policy.setContentType(contentType);
+    }
+
+    const { postURL, formData } = await this.client.presignedPostPolicy(policy);
+    return {
+      url: postURL,
+      fields: formData as Record<string, string>,
+      maxBytes,
+      contentType,
+    };
   }
 
   /** URL pre-signee pour telecharger un objet (GET). */

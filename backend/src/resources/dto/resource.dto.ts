@@ -17,14 +17,16 @@ export class CreateRessourceDto {
   @MaxLength(300)
   titre!: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxLength: 20000 })
   @IsOptional()
   @IsString()
+  @MaxLength(20000)
   contenu?: string;
 
   @ApiPropertyOptional({ description: 'Cle MinIO du fichier (epreuve/corrige/audio).' })
   @IsOptional()
   @IsString()
+  @MaxLength(512)
   fichierCle?: string;
 }
 

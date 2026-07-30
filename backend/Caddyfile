@@ -11,11 +11,14 @@ api.universe.example {
 	reverse_proxy api:3000
 
 	# En-tetes de securite de base
+	# L9 : CSP stricte cote API JSON ; le front doit echapper/sanitizer le HTML
+	# des messages / bios (XSS stocke) — ne jamais innerHTML du contenu utilisateur.
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
 		-Server
 	}
 }

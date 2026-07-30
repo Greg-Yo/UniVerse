@@ -3,11 +3,11 @@ import { IsOptional, IsString } from 'class-validator';
 
 /**
  * Le refresh token est lu depuis le cookie HttpOnly `universe_refresh`.
- * Le champ body reste optionnel pour compatibilite (clients natifs / tests).
+ * Le champ body n'est accepte qu'hors production (ou ALLOW_REFRESH_BODY=true).
  */
 export class RefreshDto {
   @ApiPropertyOptional({
-    description: 'Refresh token (optionnel si cookie HttpOnly present).',
+    description: 'Refresh token (dev/tests uniquement si cookie absent).',
   })
   @IsOptional()
   @IsString()

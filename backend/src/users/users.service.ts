@@ -81,7 +81,7 @@ export class UsersService {
       await tx.demandeStatut.update({
         where: { id: demandeId },
         data: {
-          statut: dto.statut,
+          statut: dto.statut as StatutDemande,
           decideurId: user.id,
           decidedAt: new Date(),
           motif: dto.motif ?? demande.motif,
@@ -89,7 +89,7 @@ export class UsersService {
       });
 
       let promuId: string | null = null;
-      if (dto.statut === StatutDemande.approuvee) {
+      if (dto.statut === 'approuvee') {
         await this.appliquerPromotion(tx, demande.demandeurId, demande.type, dto.universiteId);
         promuId = demande.demandeurId;
       }

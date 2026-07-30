@@ -1,30 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, TypeNotification } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { SystemPrismaService } from '../common/prisma/system-prisma.service';
 import { AuthUser } from '../common/types/auth-user';
 
 @Injectable()
 export class NotificationsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly systemDb: SystemPrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Cree une notification via le role owner (hors RLS INSERT).
-   * Empêche tout utilisateur universe_app d'insérer des notifs arbitraires
-   * (policy INSERT retiree, cf. migration sprint2).
+   * Cree une notification via SECURITY DEFINER dans la transaction RLS courante.
+   * Garantit atomicite avec le flux metier (pas d'orphelines si rollback).
    */
   async creer(
-    _tx: Prisma.TransactionClient,
+    tx: Prisma.TransactionClient,
     destinataireId: string,
     type: TypeNotification,
     payload?: Record<string, unknown>,
   ): Promise<void> {
-    await this.systemDb.notification.create({
-      data: { destinataireId, type, payload: payload as Prisma.InputJsonValue },
-    });
+    const json = payload === undefined ? null : JSON.stringify(payload);
+    await tx.$executeRaw`
+      SELECT app_creer_notification(
+        ${destinataireId},
+        ${type}::"TypeNotification",
+        ${json}::jsonb
+      )
+    `;
   }
 
   async lister(user: AuthUser, seulementNonLues = false) {

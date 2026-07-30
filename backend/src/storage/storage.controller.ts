@@ -1,8 +1,8 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
 import { StorageAccessService } from './storage-access.service';
-import { PresignDto } from './dto/presign.dto';
+import { PresignDto, PresignUploadDto } from './dto/presign.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RankGuard } from '../common/guards/rank.guard';
 import { MinRang } from '../common/decorators/roles.decorator';
@@ -29,12 +29,31 @@ export class StorageController {
   @MinRang(Rang.formateur)
   @ApiOperation({
     summary:
-      'URL pre-signee d\'upload (cle forcee sous user/{id}/ — formateurs et rangs superieurs)',
+      'Policy POST pre-signee (taille + Content-Type signes, cle sous user/{id}/)',
   })
-  async presignUpload(@CurrentUser() user: AuthUser, @Body() dto: PresignDto) {
+  async presignUpload(@CurrentUser() user: AuthUser, @Body() dto: PresignUploadDto) {
+    const plafond = this.storage.plafondUpload(dto.bucket);
+    if (dto.tailleOctets > plafond) {
+      throw new BadRequestException(
+        `tailleOctets depasse le plafond (${plafond} octets) pour le bucket ${dto.bucket}`,
+      );
+    }
     const cle = construireCleUpload(user.id, dto.cle);
-    const url = await this.storage.urlUpload(dto.bucket, cle);
-    return { url, cle, bucket: dto.bucket, prefixe: prefixeProprietaire(user.id) };
+    const policy = await this.storage.policyUpload(
+      dto.bucket,
+      cle,
+      dto.tailleOctets,
+      dto.contentType,
+    );
+    return {
+      method: 'POST' as const,
+      url: policy.url,
+      fields: policy.fields,
+      cle,
+      bucket: dto.bucket,
+      prefixe: prefixeProprietaire(user.id),
+      maxBytes: policy.maxBytes,
+    };
   }
 
   @Post('presign/download')

@@ -107,7 +107,7 @@ describe('Securite — auth email / sessions', () => {
     hashOk = await (await import('argon2')).hash('MotDePasse!2026');
   }, 120_000);
 
-  it('login refuse un compte non verifie', async () => {
+  it('login refuse un compte non verifie avec message generique', async () => {
     const db = {
       utilisateur: {
         findUnique: jest.fn().mockResolvedValue({
@@ -118,10 +118,21 @@ describe('Securite — auth email / sessions', () => {
         }),
       },
     };
-    const auth = new AuthService(db as never, {} as never, { estConfigure: () => true } as never);
+    const throttle = {
+      assertNonVerrouille: jest.fn().mockResolvedValue(undefined),
+      enregistrerEchec: jest.fn().mockResolvedValue(undefined),
+      reinitialiser: jest.fn().mockResolvedValue(undefined),
+    };
+    const auth = new AuthService(
+      db as never,
+      {} as never,
+      { estConfigure: () => true } as never,
+      throttle as never,
+    );
     await expect(
       auth.login({ email: 'a@test.local', motDePasse: 'MotDePasse!2026' }, {}),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+    ).rejects.toThrow('Identifiants invalides');
+    expect(throttle.enregistrerEchec).toHaveBeenCalled();
   });
 
   it('changerMotDePasse revoque toutes les sessions', async () => {
@@ -137,7 +148,16 @@ describe('Securite — auth email / sessions', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 3 }),
       },
     };
-    const auth = new AuthService(db as never, {} as never, { estConfigure: () => true } as never);
+    const auth = new AuthService(
+      db as never,
+      {} as never,
+      { estConfigure: () => true } as never,
+      {
+        assertNonVerrouille: jest.fn(),
+        enregistrerEchec: jest.fn(),
+        reinitialiser: jest.fn(),
+      } as never,
+    );
     await auth.changerMotDePasse(uidA, 'MotDePasse!2026', 'NouveauMot!2026');
     expect(db.sessionDevice.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({

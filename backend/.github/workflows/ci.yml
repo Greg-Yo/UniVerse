@@ -46,9 +46,34 @@ jobs:
         env:
           DATABASE_URL: postgresql://universe:universe@localhost:5432/universe_test?schema=public
           DIRECT_URL: postgresql://universe:universe@localhost:5432/universe_test?schema=public
+          APP_DB_PASSWORD: ci_app_password_strong_1
         run: npx prisma migrate deploy
 
-      - name: Tests unitaires + securite
+      - name: Creer role universe_app (RLS e2e)
+        env:
+          PGPASSWORD: universe
+        run: |
+          psql -h localhost -U universe -d universe_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'universe_app') THEN
+              CREATE ROLE universe_app LOGIN PASSWORD 'ci_app_password_strong_1';
+            ELSE
+              ALTER ROLE universe_app LOGIN PASSWORD 'ci_app_password_strong_1';
+            END IF;
+          END $$;
+          GRANT CONNECT ON DATABASE universe_test TO universe_app;
+          GRANT USAGE ON SCHEMA public TO universe_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO universe_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO universe_app;
+          REVOKE SELECT ("motDePasseHash", "emailVerificationTokenHash", "emailVerificationExpiresAt") ON TABLE "Utilisateur" FROM universe_app;
+          REVOKE UPDATE ("motDePasseHash", "emailVerificationTokenHash", "emailVerificationExpiresAt", "emailVerifie", "email") ON TABLE "Utilisateur" FROM universe_app;
+          SQL
+
+      - name: Tests unitaires + securite + RLS e2e
+        env:
+          RUN_RLS_E2E: 'true'
+          DATABASE_URL_APP: postgresql://universe_app:ci_app_password_strong_1@localhost:5432/universe_test?schema=public
         run: npm test -- --passWithNoTests
 
       - name: Build

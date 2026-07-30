@@ -22,6 +22,9 @@ import { JwtAccessPayload } from '../common/types/auth-user';
 @WebSocketGateway()
 export class RealtimeGateway implements OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);
+  /** Anti-spam simple : timestamps des derniers events par socket. */
+  private readonly lastEventAt = new Map<string, number>();
+  private readonly minIntervalMs = 200;
 
   @WebSocketServer()
   server!: Server;
@@ -45,7 +48,6 @@ export class RealtimeGateway implements OnGatewayConnection {
       if (!payload.sid) {
         throw new Error('access token sans session');
       }
-      // Lookup hors RLS (meme source de confiance que JwtStrategy).
       const [utilisateur, session] = await Promise.all([
         this.authDb.utilisateur.findUnique({
           where: { id: payload.sub },
@@ -90,11 +92,39 @@ export class RealtimeGateway implements OnGatewayConnection {
     }
   }
 
+  private throttle(client: Socket): boolean {
+    const now = Date.now();
+    const prev = this.lastEventAt.get(client.id) ?? 0;
+    if (now - prev < this.minIntervalMs) {
+      return false;
+    }
+    this.lastEventAt.set(client.id, now);
+    return true;
+  }
+
   @SubscribeMessage('rejoindre_ressource')
-  rejoindreRessource(
+  async rejoindreRessource(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { ressourceId: string },
-  ): { ok: boolean } {
+  ): Promise<{ ok: boolean }> {
+    if (!this.throttle(client)) {
+      return { ok: false };
+    }
+    const user = client.data.user as JwtAccessPayload | undefined;
+    if (!user || !data?.ressourceId) {
+      return { ok: false };
+    }
+    const ressource = await this.prisma.withRlsContext(
+      { userId: user.sub, rang: user.rang },
+      (tx) =>
+        tx.ressource.findFirst({
+          where: { id: data.ressourceId, estSupprime: false },
+          select: { id: true },
+        }),
+    );
+    if (!ressource) {
+      return { ok: false };
+    }
     client.join(`ressource:${data.ressourceId}`);
     return { ok: true };
   }
@@ -104,6 +134,9 @@ export class RealtimeGateway implements OnGatewayConnection {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { conversationId: string },
   ): Promise<{ ok: boolean }> {
+    if (!this.throttle(client)) {
+      return { ok: false };
+    }
     const user = client.data.user as JwtAccessPayload | undefined;
     if (!user) {
       return { ok: false };

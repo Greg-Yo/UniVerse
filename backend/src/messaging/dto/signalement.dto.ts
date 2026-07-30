@@ -26,6 +26,13 @@ export class CreateSignalementPersonneDto {
 }
 
 export class CreateSignalementContenuDto {
+  @ApiProperty({
+    description:
+      'Moderateur, Admin Universite ou Superadmin destinataire (L8 : requis pour la file de traitement RLS).',
+  })
+  @IsString()
+  destinataireId!: string;
+
   @ApiProperty({ enum: CibleContenu })
   @IsEnum(CibleContenu)
   cible!: CibleContenu;

@@ -8,6 +8,7 @@ export class CreateConversationDto {
 }
 
 export class PostMessageDto {
+  /** L9 : texte brut — le front DOIT echapper/sanitizer (jamais innerHTML). */
   @ApiProperty({ maxLength: 5000 })
   @IsString()
   @MinLength(1)

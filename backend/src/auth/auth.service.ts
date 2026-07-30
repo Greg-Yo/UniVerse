@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -10,6 +9,7 @@ import { Rang } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { AuthDbService } from './auth-db.service';
 import { TokenService } from './token.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthUser, JwtAccessPayload } from '../common/types/auth-user';
@@ -38,6 +38,10 @@ interface ContexteConnexion {
 
 const EMAIL_TOKEN_TTL_MS = 24 * 3600_000;
 
+/** Hash argon2 factice pour egaliser le timing quand l'email est inconnu. */
+const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -46,13 +50,17 @@ export class AuthService {
     private readonly db: AuthDbService,
     private readonly tokens: TokenService,
     private readonly mailer: MailerService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   async register(dto: RegisterDto, _ctx: ContexteConnexion): Promise<RegisterResult> {
+    const message =
+      'Si cette adresse est disponible, un email de verification a ete envoye.';
     const existant = await this.db.utilisateur.findUnique({ where: { email: dto.email } });
     if (existant) {
-      // Message generique pour limiter l'enumeration (aligné login).
-      throw new ConflictException('Impossible de creer ce compte');
+      // Reponse uniforme (pas de 409) pour limiter l'enumeration.
+      this.logger.log(`Inscription ignoree (email deja pris) : ${dto.email}`);
+      return { message, email: dto.email };
     }
 
     const jetonClair = genererJetonEmail();
@@ -72,7 +80,6 @@ export class AuthService {
     });
 
     this.logger.log(`Inscription en attente de verification email : ${dto.email}`);
-
     await this.tenterEnvoiVerification(dto.email, jetonClair);
 
     const exposeToken =
@@ -80,7 +87,7 @@ export class AuthService {
       process.env.EXPOSE_EMAIL_VERIFICATION_TOKEN === 'true';
 
     return {
-      message: 'Compte cree. Verifiez votre email avant de vous connecter.',
+      message,
       email: dto.email,
       ...(exposeToken ? { verificationToken: jetonClair } : {}),
     };
@@ -110,31 +117,43 @@ export class AuthService {
   }
 
   async resendVerification(email: string): Promise<{ message: string; verificationToken?: string }> {
-    const utilisateur = await this.db.utilisateur.findUnique({ where: { email } });
-    // Reponse uniforme pour ne pas reveler l'existence du compte.
+    // L7 : egaliser le travail crypto meme si l'email est inconnu / deja verifie.
+    const debut = Date.now();
     const message = 'Si un compte non verifie existe, un nouveau jeton a ete emis.';
-    if (!utilisateur || utilisateur.emailVerifie) {
-      return { message };
+    const jetonClair = genererJetonEmail();
+    const hash = hasherJetonEmail(jetonClair);
+
+    const utilisateur = await this.db.utilisateur.findUnique({ where: { email } });
+    let verificationToken: string | undefined;
+
+    if (utilisateur && !utilisateur.emailVerifie) {
+      await this.db.utilisateur.update({
+        where: { id: utilisateur.id },
+        data: {
+          emailVerificationTokenHash: hash,
+          emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
+        },
+      });
+
+      const exposeToken =
+        process.env.NODE_ENV !== 'production' ||
+        process.env.EXPOSE_EMAIL_VERIFICATION_TOKEN === 'true';
+
+      await this.tenterEnvoiVerification(email, jetonClair);
+      if (exposeToken) {
+        verificationToken = jetonClair;
+      }
     }
 
-    const jetonClair = genererJetonEmail();
-    await this.db.utilisateur.update({
-      where: { id: utilisateur.id },
-      data: {
-        emailVerificationTokenHash: hasherJetonEmail(jetonClair),
-        emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
-      },
-    });
-
-    const exposeToken =
-      process.env.NODE_ENV !== 'production' ||
-      process.env.EXPOSE_EMAIL_VERIFICATION_TOKEN === 'true';
-
-    await this.tenterEnvoiVerification(email, jetonClair);
+    const minMs = Number(process.env.RESEND_VERIFICATION_MIN_MS ?? 120);
+    const ecoule = Date.now() - debut;
+    if (ecoule < minMs) {
+      await new Promise((r) => setTimeout(r, minMs - ecoule));
+    }
 
     return {
       message,
-      ...(exposeToken ? { verificationToken: jetonClair } : {}),
+      ...(verificationToken ? { verificationToken } : {}),
     };
   }
 
@@ -165,19 +184,19 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, ctx: ContexteConnexion): Promise<TokensResult> {
+    await this.loginThrottle.assertNonVerrouille(dto.email);
+
     const utilisateur = await this.db.utilisateur.findUnique({ where: { email: dto.email } });
-    if (!utilisateur) {
+    const hash = utilisateur?.motDePasseHash ?? DUMMY_PASSWORD_HASH;
+    const motDePasseOk = await argon2.verify(hash, dto.motDePasse).catch(() => false);
+
+    if (!utilisateur || !motDePasseOk || !utilisateur.emailVerifie) {
+      await this.loginThrottle.enregistrerEchec(dto.email);
+      // Message unique : pas de distinction compte inexistant / mdp / email non verifie.
       throw new UnauthorizedException('Identifiants invalides');
     }
-    const motDePasseOk = await argon2.verify(utilisateur.motDePasseHash, dto.motDePasse);
-    if (!motDePasseOk) {
-      throw new UnauthorizedException('Identifiants invalides');
-    }
-    if (!utilisateur.emailVerifie) {
-      throw new UnauthorizedException(
-        'Email non verifie. Utilisez POST /auth/verify-email ou /auth/resend-verification.',
-      );
-    }
+
+    await this.loginThrottle.reinitialiser(dto.email);
     return this.emettreTokens(utilisateur.id, { ...ctx, deviceLabel: dto.deviceLabel });
   }
 

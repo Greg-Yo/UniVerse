@@ -1,25 +1,47 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 /**
- * Client Prisma PRIVILEGIE (role owner) reserve aux taches systeme/background
- * qui n'ont pas d'utilisateur courant (jobs BullMQ : fermeture de fenetre 24h,
- * recalcul des compteurs). Ne pas utiliser dans le flux requete utilisateur.
+ * Client Prisma PRIVILEGIE (role owner) reserve aux taches systeme/background.
+ * Surface restreinte : notification, video, conversation, SQL brut controle.
  */
 @Injectable()
-export class SystemPrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class SystemPrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SystemPrismaService.name);
+  private readonly client: PrismaClient;
 
   constructor() {
-    super({ datasourceUrl: process.env.DIRECT_URL ?? process.env.DATABASE_URL });
+    this.client = new PrismaClient({
+      datasourceUrl: process.env.DIRECT_URL ?? process.env.DATABASE_URL,
+    });
+  }
+
+  get notification(): PrismaClient['notification'] {
+    return this.client.notification;
+  }
+
+  get video(): PrismaClient['video'] {
+    return this.client.video;
+  }
+
+  get conversation(): PrismaClient['conversation'] {
+    return this.client.conversation;
+  }
+
+  $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> {
+    return this.client.$executeRawUnsafe(query, ...values);
+  }
+
+  $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<number> {
+    return this.client.$executeRaw(query as TemplateStringsArray, ...values);
   }
 
   async onModuleInit(): Promise<void> {
-    await this.$connect();
-    this.logger.log('Connexion systeme (owner) etablie');
+    await this.client.$connect();
+    this.logger.log('Connexion systeme (owner) etablie — surface restreinte');
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
+    await this.client.$disconnect();
   }
 }

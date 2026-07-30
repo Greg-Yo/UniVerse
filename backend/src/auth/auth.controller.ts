@@ -54,11 +54,20 @@ export class AuthController {
     const fromCookie = (req as Request & { cookies?: Record<string, string> }).cookies?.[
       REFRESH_COOKIE_NAME
     ];
-    const token = fromCookie || dto?.refreshToken;
-    if (!token) {
-      throw new UnauthorizedException('Refresh token manquant (cookie ou body)');
+    if (fromCookie) {
+      return fromCookie;
     }
-    return token;
+    // Body refresh interdit en production (XSS => vol de session).
+    const allowBody =
+      process.env.NODE_ENV !== 'production' || process.env.ALLOW_REFRESH_BODY === 'true';
+    if (allowBody && dto?.refreshToken) {
+      return dto.refreshToken;
+    }
+    throw new UnauthorizedException(
+      allowBody
+        ? 'Refresh token manquant (cookie ou body)'
+        : 'Refresh token manquant (cookie HttpOnly requis en production)',
+    );
   }
 
   @Post('register')

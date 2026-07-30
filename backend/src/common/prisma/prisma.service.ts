@@ -30,11 +30,36 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit(): Promise<void> {
     await this.$connect();
+    await this.assertRoleApplicatif();
     this.logger.log('Connexion PostgreSQL etablie');
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect();
+  }
+
+  /**
+   * Refuse de demarrer en production si DATABASE_URL n'utilise pas universe_app
+   * (sinon la RLS / FORCE RLS peut etre silencieusement contournee).
+   */
+  private async assertRoleApplicatif(): Promise<void> {
+    const rows = await this.$queryRaw<Array<{ current_user: string }>>`
+      SELECT current_user
+    `;
+    const role = rows[0]?.current_user;
+    const isProd = process.env.NODE_ENV === 'production';
+    if (role !== 'universe_app') {
+      const msg = `DATABASE_URL connecte en tant que "${role}" (attendu: universe_app)`;
+      if (isProd) {
+        throw new Error(`${msg}. Refus de demarrer en production.`);
+      }
+      this.logger.warn(`${msg} — acceptable en dev uniquement`);
+    }
+
+    // Detecte le secret faible historique de la migration RLS.
+    if (isProd && (process.env.APP_DB_PASSWORD === 'change_me_app_password' || !process.env.APP_DB_PASSWORD)) {
+      throw new Error('APP_DB_PASSWORD faible ou manquant en production');
+    }
   }
 
   /**

@@ -58,19 +58,38 @@ export class SignalementsService {
     if (dto.cible === CibleContenu.livre && !dto.livreId) {
       throw new BadRequestException('livreId requis pour un signalement de livre');
     }
-    return this.prisma.withRlsContext({ userId: user.id, rang: user.rang }, (tx) =>
-      tx.signalement.create({
+    return this.prisma.withRlsContext({ userId: user.id, rang: user.rang }, async (tx) => {
+      // L8 : destinataire obligatoire — sinon le signalement est invisible hors emetteur/superadmin (RLS).
+      const destinataire = await tx.utilisateur.findUnique({
+        where: { id: dto.destinataireId },
+        select: { id: true, rang: true },
+      });
+      if (!destinataire) {
+        throw new NotFoundException('Destinataire introuvable');
+      }
+      const rangDest = destinataire.rang as unknown as Rang;
+      if (
+        rangDest !== Rang.moderateur &&
+        rangDest !== Rang.admin_universite &&
+        rangDest !== Rang.superadmin
+      ) {
+        throw new BadRequestException(
+          'Un signalement contenu doit viser un Moderateur, Admin Universite ou Superadmin.',
+        );
+      }
+      return tx.signalement.create({
         data: {
           type: TypeSignalement.contenu,
           emetteurId: user.id,
+          destinataireId: dto.destinataireId,
           cible: dto.cible,
           videoId: dto.cible === CibleContenu.video ? dto.videoId : null,
           livreId: dto.cible === CibleContenu.livre ? dto.livreId : null,
           sujet: dto.sujet,
           description: dto.description,
         },
-      }),
-    );
+      });
+    });
   }
 
   async listerRecus(user: AuthUser) {

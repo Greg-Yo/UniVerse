@@ -6,13 +6,20 @@
 # ============================================================================
 set -e
 
-APP_PASSWORD="${APP_DB_PASSWORD:-change_me_app_password}"
+if [ -z "${APP_DB_PASSWORD}" ] || [ "${APP_DB_PASSWORD}" = "change_me_app_password" ]; then
+  echo "ERREUR: APP_DB_PASSWORD doit etre defini et different de change_me_app_password" >&2
+  exit 1
+fi
+
+APP_PASSWORD="${APP_DB_PASSWORD}"
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
     DO \$\$
     BEGIN
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'universe_app') THEN
             CREATE ROLE universe_app LOGIN PASSWORD '${APP_PASSWORD}';
+        ELSE
+            ALTER ROLE universe_app LOGIN PASSWORD '${APP_PASSWORD}';
         END IF;
     END
     \$\$;

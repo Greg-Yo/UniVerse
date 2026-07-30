@@ -11,20 +11,17 @@ class BaseVideoDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   description?: string;
 
-  @ApiPropertyOptional({ description: 'ID YouTube si la video est deja en ligne.' })
-  @IsOptional()
-  @IsString()
-  youtubeId?: string;
-
-  @ApiPropertyOptional({
+  @ApiProperty({
     description:
-      'Cle MinIO du fichier source (doit etre sous user/{votreId}/...). Upload YouTube cote serveur.',
+      'Cle MinIO du fichier source (doit etre sous user/{votreId}/...). Upload YouTube cote serveur uniquement — youtubeId n\'est plus accepté du client.',
   })
-  @IsOptional()
   @IsString()
-  sourceObjectKey?: string;
+  @MinLength(1)
+  @MaxLength(512)
+  sourceObjectKey!: string;
 
   @ApiPropertyOptional({ description: 'Ciblage niveau (exclusif avec matiere).' })
   @IsOptional()

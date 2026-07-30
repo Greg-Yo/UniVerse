@@ -46,7 +46,16 @@ async function bootstrap(): Promise<void> {
     bufferLogs: false,
   });
 
-  app.set('trust proxy', 1);
+  // L6 : trust proxy uniquement derriere un reverse-proxy de confiance.
+  // Sans cela, un client peut spoof X-Forwarded-For et biaiser le rate-limit.
+  const trustProxy =
+    process.env.TRUST_PROXY === 'true' ||
+    (process.env.NODE_ENV === 'production' && process.env.TRUST_PROXY !== 'false');
+  if (trustProxy) {
+    app.set('trust proxy', 1);
+    logger.log('trust proxy active (TRUST_PROXY / production)');
+  }
+
   app.useBodyParser('json', { limit: '1mb' });
   app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
 

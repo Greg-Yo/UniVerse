@@ -1,7 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { StatutUniversite } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AuthUser } from '../common/types/auth-user';
+import { Rang } from '../common/enums/rang.enum';
 import {
   AssignModerateurDto,
   CreateCanalDto,
@@ -99,13 +104,24 @@ export class HierarchyService {
   /**
    * Assigne un moderateur a un canal (AU-1). Le trigger SQL garantit qu'un
    * moderateur ne gere que des canaux d'une seule universite (cf. 4.2 #8).
+   * L4 : la cible doit clairement avoir le rang moderateur.
    */
   assignerModerateur(user: AuthUser, dto: AssignModerateurDto) {
-    return this.prisma.withRlsContext(this.ctx(user), (tx) =>
-      tx.attributionModerateur.create({
+    return this.prisma.withRlsContext(this.ctx(user), async (tx) => {
+      const cible = await tx.utilisateur.findUnique({
+        where: { id: dto.moderateurId },
+        select: { id: true, rang: true },
+      });
+      if (!cible) {
+        throw new NotFoundException('Utilisateur introuvable');
+      }
+      if (cible.rang !== Rang.moderateur) {
+        throw new BadRequestException('La cible doit avoir le rang moderateur');
+      }
+      return tx.attributionModerateur.create({
         data: { moderateurId: dto.moderateurId, canalId: dto.canalId },
-      }),
-    );
+      });
+    });
   }
 
   retirerModerateur(user: AuthUser, moderateurId: string, canalId: string) {

@@ -3,6 +3,7 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import { ServerOptions } from 'socket.io';
+import { redisConnectionFromEnv } from '../common/redis/redis-connection';
 
 /**
  * Adaptateur Socket.io avec backend Redis (pub/sub), afin que les evenements
@@ -18,15 +19,13 @@ export class RedisIoAdapter extends IoAdapter {
   }
 
   async connectToRedis(): Promise<void> {
-    const host = process.env.REDIS_HOST ?? 'localhost';
-    const port = Number(process.env.REDIS_PORT ?? 6379);
-    const password = process.env.REDIS_PASSWORD || undefined;
+    const { host, port, password, tls } = redisConnectionFromEnv();
 
     if (process.env.NODE_ENV === 'production' && !password) {
       throw new Error('REDIS_PASSWORD est obligatoire en production');
     }
 
-    const pubClient = new Redis({ host, port, password });
+    const pubClient = new Redis({ host, port, password, ...(tls ? { tls } : {}) });
     const subClient = pubClient.duplicate();
 
     pubClient.on('error', (e) => this.logger.error(`Redis pub: ${e.message}`));

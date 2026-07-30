@@ -7,12 +7,13 @@ import { AuthService } from './auth.service';
 import { AuthDbService } from './auth-db.service';
 import { MailerModule } from '../common/mailer/mailer.module';
 import { TokenService } from './token.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
   imports: [ConfigModule, PassportModule, JwtModule.register({}), MailerModule],
   controllers: [AuthController],
-  providers: [AuthService, AuthDbService, TokenService, JwtStrategy],
+  providers: [AuthService, AuthDbService, TokenService, LoginThrottleService, JwtStrategy],
   exports: [AuthDbService, TokenService, AuthService],
 })
 export class AuthModule {}

@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
-import { CreateGroupeTdsDto, DecisionDemandeDto, DemandeStatutDto } from './dto/user.dto';
+import { CreateGroupeTdsDto, CompteCreateurDto, DecisionDemandeDto, DemandeStatutDto } from './dto/user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RankGuard } from '../common/guards/rank.guard';
 import { MinRang } from '../common/decorators/roles.decorator';
@@ -56,8 +56,8 @@ export class UsersController {
   @Post('compte-createur')
   @MinRang(Rang.formateur)
   @ApiOperation({ summary: 'Cree/complete son compte createur (bio)' })
-  compteCreateur(@CurrentUser() user: AuthUser, @Body('bio') bio?: string) {
-    return this.users.creerCompteCreateur(user, bio);
+  compteCreateur(@CurrentUser() user: AuthUser, @Body() dto: CompteCreateurDto) {
+    return this.users.creerCompteCreateur(user, dto.bio);
   }
 
   @Post('abonnements/:compteCreateurId')

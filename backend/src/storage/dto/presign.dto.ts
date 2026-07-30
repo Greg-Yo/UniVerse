@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class PresignDto {
   @ApiProperty({ enum: ['resources', 'library'] })
@@ -15,4 +15,24 @@ export class PresignDto {
   @MinLength(1)
   @MaxLength(512)
   cle!: string;
+}
+
+export class PresignUploadDto extends PresignDto {
+  @ApiProperty({
+    description: 'Taille exacte du fichier en octets (signee dans la policy MinIO).',
+    example: 1_048_576,
+  })
+  @IsInt()
+  @Min(1)
+  @Max(524_288_000) // 500 Mo plafond absolu ; plafond effectif selon le bucket
+  tailleOctets!: number;
+
+  @ApiPropertyOptional({
+    description: 'Content-Type MIME attendu (signe dans la policy).',
+    example: 'application/pdf',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  contentType?: string;
 }

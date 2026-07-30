@@ -2,31 +2,36 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaClient } from '@prisma/client';
 
 /**
- * Client Prisma PRIVILEGIE (role owner via DIRECT_URL) reserve a
- * l'authentification.
+ * Client Prisma PRIVILEGIE (role owner via DIRECT_URL) reserve a l'authentification.
  *
- * Justification : les operations d'auth (recherche d'un compte par email avant
- * login, gestion des sessions/refresh tokens) ont lieu AVANT qu'une identite
- * RLS puisse etre positionnee. Elles constituent la racine de confiance et
- * s'executent donc hors RLS, sur une surface volontairement etroite (ce
- * service n'expose que les operations d'auth, jamais l'acces metier general).
+ * Surface volontairement etroite : uniquement `utilisateur` et `sessionDevice`.
+ * Ne pas etendre cette facade pour le metier (utiliser PrismaService + RLS).
  */
 @Injectable()
-export class AuthDbService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class AuthDbService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuthDbService.name);
+  private readonly client: PrismaClient;
 
   constructor() {
-    super({
+    this.client = new PrismaClient({
       datasourceUrl: process.env.DIRECT_URL ?? process.env.DATABASE_URL,
     });
   }
 
+  get utilisateur(): PrismaClient['utilisateur'] {
+    return this.client.utilisateur;
+  }
+
+  get sessionDevice(): PrismaClient['sessionDevice'] {
+    return this.client.sessionDevice;
+  }
+
   async onModuleInit(): Promise<void> {
-    await this.$connect();
-    this.logger.log('Connexion auth (owner) etablie');
+    await this.client.$connect();
+    this.logger.log('Connexion auth (owner) etablie — surface: utilisateur, sessionDevice');
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
+    await this.client.$disconnect();
   }
 }
