@@ -1,0 +1,112 @@
+# ============================================================================
+# UniVerse Backend - Stack complete auto-hebergee sur un seul VPS
+# Remplace Supabase : PostgreSQL + MinIO + Redis + API NestJS + Caddy (TLS)
+#
+# Production : aucun port Postgres/Redis/MinIO n'est publie sur l'hote.
+# Developpement local : docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: universe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Cree le role applicatif non-superuser au premier boot (RLS)
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - universe-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: universe-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - universe-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: universe-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - universe-net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: universe-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - universe-net
+    # Expose en interne, Caddy fait le reverse proxy + TLS.
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: universe-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - universe-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  universe-net:
+    driver: bridge

@@ -1,0 +1,568 @@
+// ============================================================================
+// UniVerse - Modele de donnees (cahier des charges section 4)
+// 22 entites, chaine de roles a heritage (4.1), matrice de messagerie (3.8).
+// Naming Prisma par defaut (tables PascalCase, colonnes camelCase) : le SQL
+// des migrations utilise les memes identifiants entre guillemets.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // role applicatif non-superuser => RLS s'applique
+  directUrl = env("DIRECT_URL")   // role owner => migrations
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Chaine de roles a heritage total (cf. 4.1). Un seul rang par utilisateur.
+enum Rang {
+  etudiant
+  formateur
+  enseignant
+  moderateur
+  admin_universite
+  superadmin
+}
+
+/// Controle l'exposition publique d'une universite (cf. 4.2 #2, SA-1).
+enum StatutUniversite {
+  en_attente
+  actif
+  suspendu
+}
+
+/// Type de ressource publiee dans un canal (cf. 4.2 #9).
+enum TypeRessource {
+  epreuve
+  texte
+  video
+  audio
+}
+
+/// Type de promotion demandee (cf. 4.2 #11).
+enum TypeDemande {
+  formateur
+  enseignant
+  moderateur
+  admin_universite
+}
+
+enum StatutDemande {
+  en_attente
+  approuvee
+  refusee
+}
+
+/// Conversation classique (libre) ou soumise a la fenetre 24h Enseignant.
+enum TypeConversation {
+  libre
+  fenetre_reponse
+}
+
+enum StatutConversation {
+  ouverte
+  fermee
+}
+
+/// Signalement personne (Etudiant->Moderateur/Admin) ou contenu (Video/Livre).
+enum TypeSignalement {
+  personne
+  contenu
+}
+
+/// Cible d'un signalement de type "contenu".
+enum CibleContenu {
+  video
+  livre
+}
+
+enum StatutSignalement {
+  en_attente
+  en_cours
+  resolu
+}
+
+enum TypeNotification {
+  nouvelle_ressource
+  reponse_recue
+  nouvelle_video_suivie
+  statut_demande
+  nouveau_message_direct
+}
+
+// ---------------------------------------------------------------------------
+// 1. Utilisateur
+// ---------------------------------------------------------------------------
+model Utilisateur {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  motDePasseHash String
+  nom            String
+  prenom         String?
+  rang           Rang     @default(etudiant)
+  emailVerifie   Boolean  @default(false)
+
+  /// Hash du jeton de verification email (clair jamais stocke).
+  emailVerificationTokenHash String?
+  emailVerificationExpiresAt DateTime?
+
+  // Rattachement academique (fait d'etudiant) - orientation par defaut du contenu.
+  niveauId String?
+  niveau   NiveauEtude? @relation("UtilisateurNiveau", fields: [niveauId], references: [id])
+
+  // Perimetre d'administration (fait d'admin) - renseigne si rang = admin_universite.
+  // Chemin distinct de niveauId, ne jamais fusionner (cf. 4.4).
+  universiteAdministreeId String?
+  universiteAdministree   Universite? @relation("AdminUniversite", fields: [universiteAdministreeId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  compteCreateur      CompteCreateur?
+  groupeTds           GroupeTds?
+  sessions            SessionDevice[]
+  notifications       Notification[]
+  ressources          Ressource[]           @relation("RessourceAuteur")
+  messages            Message[]             @relation("MessageAuteur")
+  demandesEmises      DemandeStatut[]       @relation("DemandeDemandeur")
+  demandesDecidees    DemandeStatut[]       @relation("DemandeDecideur")
+  attributions        AttributionModerateur[]
+  abonnements         Abonnement[]
+  abonnementsTds      AbonnementTds[]
+  likes               LikeVideo[]
+  livresAjoutes       Livre[]               @relation("LivreAjoutePar")
+  videosMasquees      Video[]               @relation("VideoMasquePar")
+  conversationsUn     Conversation[]        @relation("ConversationUtilisateurUn")
+  conversationsDeux   Conversation[]        @relation("ConversationUtilisateurDeux")
+  signalementsEmis    Signalement[]         @relation("SignalementEmetteur")
+  signalementsRecus   Signalement[]         @relation("SignalementDestinataire")
+  signalementsTraites Signalement[]         @relation("SignalementTraitePar")
+
+  @@index([rang])
+  @@index([niveauId])
+  @@index([universiteAdministreeId])
+}
+
+// ---------------------------------------------------------------------------
+// 2-7. Hierarchie organisationnelle (stricte, descendante - cf. 4.1)
+// ---------------------------------------------------------------------------
+model Universite {
+  id        String           @id @default(uuid())
+  nom       String
+  statut    StatutUniversite @default(en_attente)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  facultes      Faculte[]
+  admins        Utilisateur[] @relation("AdminUniversite")
+  groupesTdsTag GroupeTds[]   @relation("GroupeTdsUniversiteReference")
+
+  @@index([statut])
+}
+
+model Faculte {
+  id           String     @id @default(uuid())
+  nom          String
+  universiteId String
+  universite   Universite @relation(fields: [universiteId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  filieres Filiere[]
+
+  @@index([universiteId])
+}
+
+model Filiere {
+  id        String   @id @default(uuid())
+  nom       String
+  faculteId String
+  faculte   Faculte  @relation(fields: [faculteId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  niveaux NiveauEtude[]
+
+  @@index([faculteId])
+}
+
+model NiveauEtude {
+  id        String   @id @default(uuid())
+  nom       String
+  filiereId String
+  filiere   Filiere  @relation(fields: [filiereId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  matieres      Matiere[]
+  utilisateurs  Utilisateur[] @relation("UtilisateurNiveau")
+  videosCiblees Video[]       @relation("VideoNiveauCible")
+  livresCibles  Livre[]       @relation("LivreNiveauCible")
+
+  @@index([filiereId])
+}
+
+model Matiere {
+  id        String      @id @default(uuid())
+  nom       String
+  niveauId  String
+  niveau    NiveauEtude @relation(fields: [niveauId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  canaux        Canal[]
+  videosCiblees Video[] @relation("VideoMatiereCible")
+  livresCibles  Livre[] @relation("LivreMatiereCible")
+
+  @@index([niveauId])
+}
+
+model Canal {
+  id        String   @id @default(uuid())
+  nom       String
+  matiereId String
+  matiere   Matiere  @relation(fields: [matiereId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ressources   Ressource[]
+  attributions AttributionModerateur[]
+  signalements Signalement[]           @relation("SignalementCanal")
+
+  @@index([matiereId])
+}
+
+// ---------------------------------------------------------------------------
+// 8. Attribution_Moderateur (liaison Moderateur <-> Canal, mono-universite)
+// ---------------------------------------------------------------------------
+model AttributionModerateur {
+  id           String      @id @default(uuid())
+  moderateurId String
+  moderateur   Utilisateur @relation(fields: [moderateurId], references: [id], onDelete: Cascade)
+  canalId      String
+  canal        Canal       @relation(fields: [canalId], references: [id], onDelete: Cascade)
+  createdAt    DateTime    @default(now())
+
+  @@unique([moderateurId, canalId])
+  @@index([canalId])
+}
+
+// ---------------------------------------------------------------------------
+// 9. Ressource (publiee par un moderateur, ancre sa discussion)
+// ---------------------------------------------------------------------------
+model Ressource {
+  id          String        @id @default(uuid())
+  canalId     String
+  canal       Canal         @relation(fields: [canalId], references: [id], onDelete: Cascade)
+  auteurId    String
+  auteur      Utilisateur   @relation("RessourceAuteur", fields: [auteurId], references: [id])
+  type        TypeRessource
+  titre       String
+  contenu     String?
+  // Cle de l'objet dans MinIO (epreuve/corrige/audio), null pour type texte.
+  fichierCle  String?
+  estSupprime Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  messages Message[]
+
+  @@index([canalId])
+  @@index([auteurId])
+}
+
+// ---------------------------------------------------------------------------
+// 10. Message (ressourceId XOR conversationId - cf. 4.4)
+// ---------------------------------------------------------------------------
+model Message {
+  id       String  @id @default(uuid())
+  auteurId String
+  auteur   Utilisateur @relation("MessageAuteur", fields: [auteurId], references: [id])
+
+  // Ancrage exclusif : exactement un des deux (contrainte CHECK en SQL).
+  ressourceId String?
+  ressource   Ressource?    @relation(fields: [ressourceId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // Reponse imbriquee - uniquement pertinent quand ressourceId est renseigne.
+  repondAId String?
+  repondA   Message?  @relation("MessageReponses", fields: [repondAId], references: [id])
+  reponses  Message[] @relation("MessageReponses")
+
+  contenu     String
+  estSupprime Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ressourceId])
+  @@index([conversationId])
+  @@index([repondAId])
+  @@index([auteurId])
+}
+
+// ---------------------------------------------------------------------------
+// 11. Demande_Statut (audit des promotions dans la chaine)
+// ---------------------------------------------------------------------------
+model DemandeStatut {
+  id          String        @id @default(uuid())
+  demandeurId String
+  demandeur   Utilisateur   @relation("DemandeDemandeur", fields: [demandeurId], references: [id], onDelete: Cascade)
+  type        TypeDemande
+  statut      StatutDemande @default(en_attente)
+  motif       String?
+  decideurId  String?
+  decideur    Utilisateur?  @relation("DemandeDecideur", fields: [decideurId], references: [id])
+  createdAt   DateTime      @default(now())
+  decidedAt   DateTime?
+
+  @@index([demandeurId])
+  @@index([statut])
+}
+
+// ---------------------------------------------------------------------------
+// 12. Compte_Createur (extension profil, rang >= formateur)
+// ---------------------------------------------------------------------------
+model CompteCreateur {
+  id             String      @id @default(uuid())
+  utilisateurId  String      @unique
+  utilisateur    Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  bio            String?
+  nombreAbonnes  Int         @default(0) // compteur denormalise (cf. 4.4)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  videos      Video[]
+  abonnements Abonnement[]
+}
+
+// ---------------------------------------------------------------------------
+// 13. Video (compteCreateurId XOR groupeTdsId ; niveau XOR matiere)
+// ---------------------------------------------------------------------------
+model Video {
+  id          String  @id @default(uuid())
+  titre       String
+  description String?
+  youtubeId   String  // reference video YouTube (mode non repertorie)
+
+  compteCreateurId String?
+  compteCreateur   CompteCreateur? @relation(fields: [compteCreateurId], references: [id], onDelete: Cascade)
+  groupeTdsId      String?
+  groupeTds        GroupeTds?      @relation(fields: [groupeTdsId], references: [id], onDelete: Cascade)
+
+  // Ciblage mutuellement exclusif (cf. 4.4).
+  niveauCibleId String?
+  niveauCible   NiveauEtude? @relation("VideoNiveauCible", fields: [niveauCibleId], references: [id])
+  matiereCibleeId String?
+  matiereCiblee   Matiere?   @relation("VideoMatiereCible", fields: [matiereCibleeId], references: [id])
+
+  nombreLikes Int     @default(0) // compteur denormalise (cf. 4.4)
+  estMasquee  Boolean @default(false)
+  masqueParId String?
+  masquePar   Utilisateur? @relation("VideoMasquePar", fields: [masqueParId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  likes        LikeVideo[]
+  signalements Signalement[]
+
+  @@index([compteCreateurId])
+  @@index([groupeTdsId])
+  @@index([niveauCibleId])
+  @@index([matiereCibleeId])
+  @@index([estMasquee])
+}
+
+// ---------------------------------------------------------------------------
+// 14. Abonnement (Utilisateur -> Compte_Createur)
+// ---------------------------------------------------------------------------
+model Abonnement {
+  id               String         @id @default(uuid())
+  utilisateurId    String
+  utilisateur      Utilisateur    @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  compteCreateurId String
+  compteCreateur   CompteCreateur @relation(fields: [compteCreateurId], references: [id], onDelete: Cascade)
+  createdAt        DateTime       @default(now())
+
+  @@unique([utilisateurId, compteCreateurId])
+  @@index([compteCreateurId])
+}
+
+// ---------------------------------------------------------------------------
+// 15. Notification
+// ---------------------------------------------------------------------------
+model Notification {
+  id            String           @id @default(uuid())
+  destinataireId String
+  destinataire   Utilisateur     @relation(fields: [destinataireId], references: [id], onDelete: Cascade)
+  type          TypeNotification
+  payload       Json?
+  lu            Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+
+  @@index([destinataireId, lu])
+}
+
+// ---------------------------------------------------------------------------
+// 16. Session/Device (trace connexions, refresh tokens revocables)
+// ---------------------------------------------------------------------------
+model SessionDevice {
+  id               String      @id @default(uuid())
+  utilisateurId    String
+  utilisateur      Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  refreshTokenHash String      // hash du refresh token (jamais stocke en clair)
+  deviceLabel      String?
+  ip               String?
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime    @default(now())
+  createdAt        DateTime    @default(now())
+
+  @@index([utilisateurId])
+  @@index([refreshTokenHash])
+}
+
+// ---------------------------------------------------------------------------
+// 17. Groupe_TDS (espace d'un Tuteur TDS, hors chaine de roles)
+// ---------------------------------------------------------------------------
+model GroupeTds {
+  id        String      @id @default(uuid())
+  nom       String
+  tuteurId  String      @unique
+  tuteur    Utilisateur @relation(fields: [tuteurId], references: [id], onDelete: Cascade)
+  // Tag informatif uniquement - JAMAIS une portee d'acces (cf. 4.4).
+  universiteReferenceId String?
+  universiteReference   Universite? @relation("GroupeTdsUniversiteReference", fields: [universiteReferenceId], references: [id])
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  videos         Video[]
+  abonnementsTds AbonnementTds[]
+
+  @@index([universiteReferenceId])
+}
+
+// ---------------------------------------------------------------------------
+// 18. Abonnement_TDS (Utilisateur -> Groupe_TDS)
+// ---------------------------------------------------------------------------
+model AbonnementTds {
+  id            String      @id @default(uuid())
+  utilisateurId String
+  utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  groupeTdsId   String
+  groupeTds     GroupeTds   @relation(fields: [groupeTdsId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([utilisateurId, groupeTdsId])
+  @@index([groupeTdsId])
+}
+
+// ---------------------------------------------------------------------------
+// 19. Conversation (messagerie directe, fenetre 24h cote Enseignant)
+// ---------------------------------------------------------------------------
+model Conversation {
+  id               String             @id @default(uuid())
+  utilisateurUnId  String
+  utilisateurUn    Utilisateur        @relation("ConversationUtilisateurUn", fields: [utilisateurUnId], references: [id], onDelete: Cascade)
+  utilisateurDeuxId String
+  utilisateurDeux   Utilisateur       @relation("ConversationUtilisateurDeux", fields: [utilisateurDeuxId], references: [id], onDelete: Cascade)
+  type             TypeConversation   @default(libre)
+  statut           StatutConversation @default(ouverte)
+  // Echeance de la fenetre de reponse (type = fenetre_reponse uniquement).
+  dateExpirationFenetre DateTime?
+  // Trace qu'au moins une reponse Enseignant a eu lieu (fenetre reversible, cf. 4.4).
+  aDejaRepondu     Boolean            @default(false)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  messages Message[]
+
+  @@unique([utilisateurUnId, utilisateurDeuxId])
+  @@index([utilisateurDeuxId])
+  @@index([statut])
+}
+
+// ---------------------------------------------------------------------------
+// 20. Signalement (flux asynchrone simple, deux variantes)
+// ---------------------------------------------------------------------------
+model Signalement {
+  id        String            @id @default(uuid())
+  type      TypeSignalement
+  emetteurId String
+  emetteur   Utilisateur      @relation("SignalementEmetteur", fields: [emetteurId], references: [id], onDelete: Cascade)
+
+  // Variante "personne" : Etudiant -> Moderateur/Admin (cf. AU-5/MOD-6/ET-13).
+  destinataireId String?
+  destinataire   Utilisateur? @relation("SignalementDestinataire", fields: [destinataireId], references: [id])
+  canalId        String?
+  canal          Canal?       @relation("SignalementCanal", fields: [canalId], references: [id])
+
+  // Variante "contenu" : signale une Video ou un Livre.
+  cible   CibleContenu?
+  videoId String?
+  video   Video?  @relation(fields: [videoId], references: [id])
+  livreId String?
+  livre   Livre?  @relation(fields: [livreId], references: [id])
+
+  sujet       String
+  description String
+  statut      StatutSignalement @default(en_attente)
+  traiteParId String?
+  traitePar   Utilisateur?      @relation("SignalementTraitePar", fields: [traiteParId], references: [id])
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([destinataireId, statut])
+  @@index([type])
+}
+
+// ---------------------------------------------------------------------------
+// 21. Livre (bibliotheque numerique partagee, ecriture >= admin_universite)
+// ---------------------------------------------------------------------------
+model Livre {
+  id          String  @id @default(uuid())
+  titre       String
+  auteurLivre String?
+  description String?
+  fichierCle  String  // cle MinIO du PDF/EPUB
+  ajouteParId String
+  ajoutePar   Utilisateur @relation("LivreAjoutePar", fields: [ajouteParId], references: [id])
+
+  // Ciblage optionnel, mutuellement exclusif (memes regles que Video).
+  niveauCibleId String?
+  niveauCible   NiveauEtude? @relation("LivreNiveauCible", fields: [niveauCibleId], references: [id])
+  matiereCibleeId String?
+  matiereCiblee   Matiere?   @relation("LivreMatiereCible", fields: [matiereCibleeId], references: [id])
+
+  estArchive Boolean  @default(false) // soft-delete (cf. 4.4)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  signalements Signalement[]
+
+  @@index([ajouteParId])
+  @@index([niveauCibleId])
+  @@index([matiereCibleeId])
+}
+
+// ---------------------------------------------------------------------------
+// 22. Like_Video (hard-delete au unlike - seule exception au soft-delete)
+// ---------------------------------------------------------------------------
+model LikeVideo {
+  id            String      @id @default(uuid())
+  utilisateurId String
+  utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  videoId       String
+  video         Video       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([utilisateurId, videoId])
+  @@index([videoId])
+}

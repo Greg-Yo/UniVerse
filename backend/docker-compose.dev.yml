@@ -1,0 +1,19 @@
+# ============================================================================
+# Overlay DEV uniquement — publie Postgres / Redis / MinIO sur localhost.
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# NE PAS utiliser ce fichier en production.
+# ============================================================================
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"

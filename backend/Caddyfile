@@ -1,0 +1,41 @@
+# ============================================================================
+# Caddy - Reverse proxy + TLS automatique (Let's Encrypt)
+# Remplacer `api.universe.example` par votre domaine reel.
+# En local, utiliser `:80` ou `localhost` a la place du domaine.
+# ============================================================================
+
+api.universe.example {
+	encode gzip zstd
+
+	# API REST + WebSocket (Socket.io). Caddy proxifie l'upgrade WS nativement.
+	reverse_proxy api:3000
+
+	# En-tetes de securite de base
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+# Stockage d'objets MinIO (telechargements via URLs pre-signees)
+storage.universe.example {
+	encode gzip zstd
+	reverse_proxy minio:9000
+}
+
+# ---------------------------------------------------------------------------
+# Console MinIO : NE PAS exposer publiquement.
+# Decommenter UNIQUEMENT avec restriction IP (ou VPN) en maintenance.
+# ---------------------------------------------------------------------------
+# console.universe.example {
+# 	@allowed {
+# 		remote_ip 10.0.0.0/8 192.168.0.0/16 172.16.0.0/12
+# 	}
+# 	handle @allowed {
+# 		reverse_proxy minio:9001
+# 	}
+# 	respond "Forbidden" 403
+# }
